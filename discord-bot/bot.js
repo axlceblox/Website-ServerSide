@@ -1,156 +1,144 @@
-'use strict';
-
 require('dotenv').config();
+const { Client, GatewayIntentBits, ChannelType, EmbedBuilder } = require('discord.js');
+const axios = require('axios');
 
-const { Client, GatewayIntentBits, AttachmentBuilder } = require('discord.js');
-const fetch = require('node-fetch');
-const crypto = require('crypto');
-
-// ── Validate environment ──────────────────────────────────────────────────────
-const REQUIRED_ENV = ['DISCORD_TOKEN', 'CRYPTID_API_URL', 'CRYPTID_API_KEY'];
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`[FATAL] Missing env var: ${key}`);
-    process.exit(1);
-  }
-}
-
-const BOT_PREFIX = process.env.BOT_PREFIX || '!';
-const API_URL = process.env.CRYPTID_API_URL;
-const API_KEY = process.env.CRYPTID_API_KEY;
-
-const SCRIPT_ID_PATTERN = /^\d{10,20}$/;
-const URL_ID_PATTERN = /[?&]Id=(\d{10,20})/i;
-
-function parseScriptId(input) {
-  const trimmed = input.trim();
-  const urlMatch = trimmed.match(URL_ID_PATTERN);
-  if (urlMatch) return urlMatch[1];
-  if (SCRIPT_ID_PATTERN.test(trimmed)) return trimmed;
-  return null;
-}
-
-function randomFilename(scriptId) {
-  const rand = crypto.randomBytes(6).toString('hex');
-  return `decoded_${rand}.txt`;
-}
-
-// ── Discord client ────────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.Guilds
   ]
 });
 
-client.once('ready', () => {
-  console.log(`[Cryptid X Bot] Logged in as ${client.user.tag}`);
-  client.user.setActivity('decoding scripts', { type: 0 });
-});
+const BOT_TOKEN = process.env.DISCORD_TOKEN;
+const API_URL = process.env.CRYPTID_API_URL || 'http://localhost:3001';
+const API_KEY = process.env.CRYPTID_API_KEY;
+const PREFIX = process.env.BOT_PREFIX || '!';
 
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith(`${BOT_PREFIX}decode`)) return;
-
-  // Parse argument
-  const parts = message.content.slice(`${BOT_PREFIX}decode`.length).trim();
-  if (!parts) {
-    return message.reply({
-      content: '```\nUsage: !decode <Script ID or full URL>\nExample: !decode 2723928466610\n```'
-    });
-  }
-
-  const scriptId = parseScriptId(parts);
-  if (!scriptId) {
-    return message.reply({
-      content: '❌ **Invalid input.** Provide a numeric Script ID (10–20 digits) or a full `?Id=...` URL.'
-    });
-  }
-
-  // "Thinking" state
-  let thinkingMsg;
-  try {
-    thinkingMsg = await message.reply({
-      content: `⏳ Decoding \`${scriptId}\`... please wait.`
-    });
-  } catch {
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_URL}/api/decode`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': API_KEY
-      },
-      body: JSON.stringify({ id: scriptId })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      await thinkingMsg.edit({
-        content: `❌ **Decode failed:** ${data.error || `HTTP ${res.status}`}`
-      });
-      return;
-    }
-
-    const { lua, bytes } = data;
-
-    // Upload as a randomized .txt file attachment
-    const filename = randomFilename(scriptId);
-    const attachment = new AttachmentBuilder(Buffer.from(lua, 'utf8'), { name: filename });
-
-    await thinkingMsg.edit({
-      content: [
-        `✅ **Script \`${scriptId}\` decrypted successfully!**`,
-        `📦 Size: \`${formatBytes(bytes)}\``,
-        `📄 File: \`${filename}\``,
-        ``,
-        `> ⚠️ You requested this decode. Ensure you are authorized to access this script.`
-      ].join('\n'),
-      files: [attachment]
-    });
-
-  } catch (err) {
-    console.error('[Bot decode error]', err);
-    await thinkingMsg.edit({
-      content: '❌ **Error:** Could not reach the Cryptid X backend. Try again later.'
-    });
-  }
-});
-
-// ── Help command ──────────────────────────────────────────────────────────────
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith(`${BOT_PREFIX}cxhelp`)) return;
-
-  await message.reply({
-    content: [
-      '```',
-      'Cryptid X Decoder — Commands',
-      '─────────────────────────────',
-      `${BOT_PREFIX}decode <ID or URL>   Decode a script by numeric ID or full URL`,
-      `${BOT_PREFIX}cxhelp               Show this help message`,
-      '',
-      'Examples:',
-      `  ${BOT_PREFIX}decode 2723928466610`,
-      `  ${BOT_PREFIX}decode https://encrypt-x.pages.dev/Scripts?Id=2723928466610`,
-      '```'
-    ].join('\n')
-  });
-});
-
-function formatBytes(b) {
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+if (!BOT_TOKEN) {
+  console.error('DISCORD_TOKEN is not set in .env');
+  process.exit(1);
 }
 
-// ── Login ─────────────────────────────────────────────────────────────────────
-client.login(process.env.DISCORD_TOKEN).catch(err => {
-  console.error('[FATAL] Discord login failed:', err.message);
-  process.exit(1);
+if (!API_KEY) {
+  console.warn('WARNING: CRYPTID_API_KEY is not set. Some features may not work.');
+}
+
+client.on('ready', () => {
+  console.log(`✅ Bot logged in as ${client.user.tag}`);
+  client.user.setActivity('Lua scripts', { type: 'WATCHING' });
 });
+
+client.on('messageCreate', async (message) => {
+  // Ignore bot messages
+  if (message.author.bot) return;
+
+  // Check if message starts with prefix
+  if (!message.content.startsWith(PREFIX)) return;
+
+  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const command = args[0].toLowerCase();
+
+  try {
+    if (command === 'decode') {
+      await handleDecode(message, args);
+    } else if (command === 'cxhelp') {
+      await handleHelp(message);
+    }
+  } catch (error) {
+    console.error('Command error:', error);
+    message.reply('❌ An error occurred while processing your command.').catch(console.error);
+  }
+});
+
+async function handleDecode(message, args) {
+  if (args.length < 2) {
+    return message.reply('❌ Usage: `!decode <ID or URL>`');
+  }
+
+  const scriptInput = args.slice(1).join(' ');
+
+  // Show thinking status
+  const thinkingMsg = await message.reply('🔍 Decoding script...');
+
+  try {
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    if (API_KEY) {
+      headers['X-API-Key'] = API_KEY;
+    }
+
+    const response = await axios.post(`${API_URL}/api/decode`, {
+      id: !scriptInput.includes('http') ? scriptInput : undefined,
+      url: scriptInput.includes('http') ? scriptInput : undefined
+    }, { headers });
+
+    const { scriptId, lua, bytes } = response.data;
+
+    // Create a safe filename
+    const randomFilename = Math.random().toString(36).substring(7) + '.txt';
+
+    // Send script as file (more secure than chat)
+    if (lua && lua.length > 0) {
+      const buffer = Buffer.from(lua, 'utf-8');
+
+      const embed = new EmbedBuilder()
+        .setColor('#6c63ff')
+        .setTitle('✅ Script Decoded')
+        .setDescription(`Script ID: ${scriptId}`)
+        .addFields(
+          { name: 'Size', value: `${bytes} bytes`, inline: true },
+          { name: 'Status', value: 'Successfully decoded', inline: true }
+        )
+        .setFooter({ text: 'Cryptid X Decoder' })
+        .setTimestamp();
+
+      await message.reply({
+        embeds: [embed],
+        files: [{ attachment: buffer, name: randomFilename }]
+      });
+    } else {
+      await message.reply('❌ No script content found.');
+    }
+
+    await thinkingMsg.delete();
+  } catch (error) {
+    console.error('Decode error:', error.response?.data || error.message);
+
+    const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
+    await message.reply(`❌ Failed to decode script: ${errorMsg}`);
+    await thinkingMsg.delete();
+  }
+}
+
+async function handleHelp(message) {
+  const embed = new EmbedBuilder()
+    .setColor('#00d4ff')
+    .setTitle('🔐 Cryptid X Decoder Bot')
+    .setDescription('Decrypt and retrieve authorized Lua scripts')
+    .addFields(
+      {
+        name: '📋 Commands',
+        value: `\`${PREFIX}decode <ID>\` - Decode a script by numeric ID\n\`${PREFIX}decode <URL>\` - Decode a script from a full URL\n\`${PREFIX}cxhelp\` - Show this help message`,
+        inline: false
+      },
+      {
+        name: '🔒 Security',
+        value: 'Scripts are sent as file attachments. Never share raw keys or encrypted data in chat.',
+        inline: false
+      },
+      {
+        name: '📚 Examples',
+        value: `\`${PREFIX}decode 2723928466610\`\n\`${PREFIX}decode https://encrypt-x.pages.dev/Scripts?Id=2723928466610\``,
+        inline: false
+      }
+    )
+    .setFooter({ text: 'Cryptid X Decoder' })
+    .setTimestamp();
+
+  await message.reply({ embeds: [embed] });
+}
+
+client.login(BOT_TOKEN);

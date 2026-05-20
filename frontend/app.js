@@ -1,477 +1,363 @@
-/**
- * Cryptid X Decoder — Frontend App
- * Pure vanilla JS, no frameworks.
- */
-
-'use strict';
-
-// ── Config ────────────────────────────────────────────────────────────────────
+// Configuration
 const API_BASE = window.CRYPTID_API_BASE || 'http://localhost:3001';
-const HISTORY_KEY = 'cxd_history';
-const AUTH_TOKEN_KEY = 'cxd_token';
-const AUTH_USER_KEY = 'cxd_user';
 
-// ── State ─────────────────────────────────────────────────────────────────────
-let currentLua = '';
-let currentScriptId = '';
-let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
-let authUser = localStorage.getItem(AUTH_USER_KEY) || null;
+// State
+let authToken = localStorage.getItem('authToken') || null;
+let currentUser = localStorage.getItem('currentUser') || null;
 
-// ── DOM refs ──────────────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-const $q = sel => document.querySelector(sel);
-const $all = sel => document.querySelectorAll(sel);
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  updateAuthUI();
+});
 
-// ── Live clock ────────────────────────────────────────────────────────────────
-function updateClock() {
-  const el = $('live-time');
-  if (el) el.textContent = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-}
-updateClock();
-setInterval(updateClock, 1000);
-
-// ── Navigation ────────────────────────────────────────────────────────────────
-function showPage(name) {
-  $all('.page').forEach(p => p.classList.remove('active'));
-  $all('.nav-link').forEach(l => l.classList.remove('active'));
-  const page = $(`page-${name}`);
-  if (page) page.classList.add('active');
-  const link = $q(`.nav-link[data-page="${name}"]`);
-  if (link) link.classList.add('active');
-  if (name === 'history') renderHistory();
-  if (name === 'keys') renderKeysPage();
-}
-
-$all('.nav-link').forEach(link => {
-  link.addEventListener('click', e => {
-    e.preventDefault();
-    showPage(link.dataset.page);
+// Tab Management
+function showTab(tabName) {
+  // Hide all tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.classList.remove('active');
   });
-});
 
-// ── Decode flow ───────────────────────────────────────────────────────────────
-const loadingSteps = [
-  'Validating ID...',
-  'Fetching encrypted payload...',
-  'Decrypting Base32 → XOR...',
-  'Rendering Lua output...'
-];
-
-function setLoading(active, stepIndex = 0) {
-  const ls = $('loading-state');
-  const bar = $('loading-bar');
-  const steps = $('loading-steps');
-  const btn = $('decode-btn');
-
-  if (active) {
-    ls.classList.remove('hidden');
-    btn.disabled = true;
-    btn.querySelector('.btn-text').textContent = 'DECODING...';
-    bar.style.width = `${(stepIndex + 1) * 25}%`;
-    steps.innerHTML = loadingSteps
-      .map((s, i) => `<span class="step${i === stepIndex ? ' active' : ''}">${s}</span>`)
-      .join('');
-  } else {
-    ls.classList.add('hidden');
-    btn.disabled = false;
-    btn.querySelector('.btn-text').textContent = 'INITIATE DECODE';
-    bar.style.width = '0%';
-  }
-}
-
-function showError(msg) {
-  const box = $('error-box');
-  $('error-text').textContent = msg;
-  box.classList.remove('hidden');
-}
-
-function clearError() {
-  $('error-box').classList.add('hidden');
-}
-
-function showResult(scriptId, lua, bytes) {
-  currentLua = lua;
-  currentScriptId = scriptId;
-
-  $('res-id').textContent = scriptId;
-  $('res-bytes').textContent = formatBytes(bytes);
-  $('lua-output').textContent = lua.slice(0, 4000) + (lua.length > 4000 ? '\n-- [truncated for preview] --' : '');
-
-  $('result-panel').classList.remove('hidden');
-}
-
-function hideResult() {
-  $('result-panel').classList.add('hidden');
-  currentLua = '';
-  currentScriptId = '';
-}
-
-async function runDecode() {
-  const raw = $('script-input').value.trim();
-  if (!raw) {
-    showError('Please enter a Script ID or URL.');
-    return;
-  }
-
-  clearError();
-  hideResult();
-
-  // Animate through steps
-  const stepDelay = 400;
-  for (let i = 0; i < loadingSteps.length - 1; i++) {
-    setLoading(true, i);
-    await sleep(stepDelay);
-  }
-  setLoading(true, loadingSteps.length - 1);
-
-  try {
-    const res = await fetch(`${API_BASE}/api/decode`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-      },
-      body: JSON.stringify({ id: raw })
-    });
-    const data = await res.json();
-
-    setLoading(false);
-
-    if (!res.ok) {
-      showError(data.error || `Server error (${res.status})`);
-      return;
-    }
-
-    showResult(data.scriptId, data.lua, data.bytes);
-    addHistory(data.scriptId);
-  } catch (err) {
-    setLoading(false);
-    showError('Network error: could not reach the decode server. Is the backend running?');
-  }
-}
-
-$('decode-btn').addEventListener('click', runDecode);
-$('script-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') runDecode();
-});
-
-// ── Paste button ──────────────────────────────────────────────────────────────
-$('paste-btn').addEventListener('click', async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    $('script-input').value = text;
-    $('script-input').focus();
-  } catch {
-    // Clipboard API may not be available; silently fail
-  }
-});
-
-// ── Copy / Download ───────────────────────────────────────────────────────────
-$('copy-btn').addEventListener('click', () => {
-  if (!currentLua) return;
-  navigator.clipboard.writeText(currentLua).then(() => {
-    const btn = $('copy-btn');
-    const orig = btn.innerHTML;
-    btn.innerHTML = '✓ COPIED';
-    btn.style.color = 'var(--green)';
-    setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 1500);
+  // Remove active class from all buttons
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.classList.remove('active');
   });
-});
 
-$('download-btn').addEventListener('click', () => {
-  if (!currentLua || !currentScriptId) return;
-  const blob = new Blob([currentLua], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${currentScriptId}_decrypted.lua`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
+  // Show selected tab
+  document.getElementById(tabName).classList.add('active');
 
-// ── History ───────────────────────────────────────────────────────────────────
-function getHistory() {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
-  catch { return []; }
-}
+  // Add active class to clicked button
+  event.target.classList.add('active');
 
-function addHistory(scriptId) {
-  const h = getHistory().filter(e => e.id !== scriptId);
-  h.unshift({ id: scriptId, ts: Date.now() });
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, 50)));
-}
-
-function renderHistory() {
-  const list = $('history-list');
-  const h = getHistory();
-  if (!h.length) {
-    list.innerHTML = `<div class="empty-state"><span class="empty-icon">∅</span><p>No decodes yet.</p></div>`;
-    return;
-  }
-  list.innerHTML = h.map(e => `
-    <div class="history-item">
-      <div>
-        <div class="history-id">${e.id}</div>
-        <div class="history-time">${new Date(e.ts).toLocaleString()}</div>
-      </div>
-      <button class="history-redecode" data-id="${e.id}">RE-DECODE →</button>
-    </div>
-  `).join('');
-
-  list.querySelectorAll('.history-redecode').forEach(btn => {
-    btn.addEventListener('click', () => {
-      $('script-input').value = btn.dataset.id;
-      showPage('decoder');
-      runDecode();
-    });
-  });
-}
-
-$('clear-history').addEventListener('click', () => {
-  localStorage.removeItem(HISTORY_KEY);
-  renderHistory();
-});
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-function updateAuthUI() {
-  const btn = $('auth-toggle');
-  if (authToken && authUser) {
-    btn.textContent = `LOGOUT [${authUser}]`;
-  } else {
-    btn.textContent = 'LOGIN';
+  // Load data if needed
+  if (tabName === 'keys' && authToken) {
+    loadApiKeys();
   }
 }
-updateAuthUI();
 
-$('auth-toggle').addEventListener('click', () => {
-  if (authToken) {
-    authToken = null; authUser = null;
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    localStorage.removeItem(AUTH_USER_KEY);
-    updateAuthUI();
-    renderKeysPage();
-  } else {
-    openAuthModal();
-  }
-});
+// Auth Functions
+async function register() {
+  const username = document.getElementById('registerUsername').value;
+  const password = document.getElementById('registerPassword').value;
+  const errorDiv = document.getElementById('registerError');
+  const successDiv = document.getElementById('registerSuccess');
 
-function openAuthModal() {
-  $('auth-modal').classList.remove('hidden');
-  $('auth-username').focus();
-}
-
-$('modal-close').addEventListener('click', () => $('auth-modal').classList.add('hidden'));
-$('auth-modal').addEventListener('click', e => { if (e.target === $('auth-modal')) $('auth-modal').classList.add('hidden'); });
-
-let authMode = 'login';
-$all('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    authMode = btn.dataset.tab;
-    $all('.tab-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    $('auth-submit').textContent = authMode === 'login' ? 'LOGIN' : 'REGISTER';
-    $('auth-mode-text').innerHTML = authMode === 'login'
-      ? `No account? <a href="#" id="switch-mode">Register here</a>`
-      : `Have an account? <a href="#" id="switch-mode">Login here</a>`;
-    bindSwitchMode();
-    $('auth-error').classList.add('hidden');
-  });
-});
-
-function bindSwitchMode() {
-  const sm = $('switch-mode');
-  if (sm) sm.addEventListener('click', e => {
-    e.preventDefault();
-    const target = authMode === 'login' ? 'register' : 'login';
-    $q(`.tab-btn[data-tab="${target}"]`).click();
-  });
-}
-bindSwitchMode();
-
-$('auth-submit').addEventListener('click', async () => {
-  const username = $('auth-username').value.trim();
-  const password = $('auth-password').value;
-  $('auth-error').classList.add('hidden');
+  errorDiv.classList.add('hidden');
+  successDiv.classList.add('hidden');
 
   if (!username || !password) {
-    showModalError('auth-error', 'Username and password are required.');
+    errorDiv.textContent = 'Please fill in all fields';
+    errorDiv.classList.remove('hidden');
     return;
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/auth/${authMode}`, {
+    const response = await fetch(`${API_BASE}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
-    if (!res.ok) { showModalError('auth-error', data.error); return; }
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Registration failed');
+    }
 
     authToken = data.token;
-    authUser = data.username;
-    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
-    localStorage.setItem(AUTH_USER_KEY, authUser);
+    currentUser = data.username;
+    localStorage.setItem('authToken', authToken);
+    localStorage.setItem('currentUser', currentUser);
+
+    successDiv.textContent = `Registration successful! Welcome, ${currentUser}`;
+    successDiv.classList.remove('hidden');
+
+    document.getElementById('registerUsername').value = '';
+    document.getElementById('registerPassword').value = '';
+
     updateAuthUI();
-    $('auth-modal').classList.add('hidden');
-    $('auth-password').value = '';
-    renderKeysPage();
-  } catch {
-    showModalError('auth-error', 'Network error. Is the backend running?');
-  }
-});
 
-$('keys-login-btn').addEventListener('click', openAuthModal);
-
-// ── Keys Page ─────────────────────────────────────────────────────────────────
-function renderKeysPage() {
-  const wall = $('keys-auth-wall');
-  const panel = $('keys-panel');
-  if (authToken) {
-    wall.classList.add('hidden');
-    panel.classList.remove('hidden');
-    loadKeys();
-  } else {
-    wall.classList.remove('hidden');
-    panel.classList.add('hidden');
+    setTimeout(() => {
+      successDiv.classList.add('hidden');
+    }, 3000);
+  } catch (error) {
+    errorDiv.textContent = error.message;
+    errorDiv.classList.remove('hidden');
   }
 }
 
-async function loadKeys() {
-  if (!authToken) return;
-  try {
-    const res = await fetch(`${API_BASE}/api/keys`, {
-      headers: { Authorization: `Bearer ${authToken}` }
-    });
-    if (res.status === 401) { handleAuthExpiry(); return; }
-    const data = await res.json();
-    renderKeysList(data.keys || []);
-  } catch {
-    $('keys-list').innerHTML = `<div class="empty-state"><p>Could not load keys. Backend may be offline.</p></div>`;
-  }
-}
+async function login() {
+  const username = document.getElementById('loginUsername').value;
+  const password = document.getElementById('loginPassword').value;
+  const errorDiv = document.getElementById('loginError');
+  const successDiv = document.getElementById('loginSuccess');
 
-function renderKeysList(keys) {
-  const list = $('keys-list');
-  if (!keys.length) {
-    list.innerHTML = `<div class="empty-state"><span class="empty-icon">∅</span><p>No API keys yet. Create one above.</p></div>`;
+  errorDiv.classList.add('hidden');
+  successDiv.classList.add('hidden');
+
+  if (!username || !password) {
+    errorDiv.textContent = 'Please fill in all fields';
+    errorDiv.classList.remove('hidden');
     return;
   }
-  list.innerHTML = keys.map(k => `
-    <div class="key-item" data-id="${k.id}">
-      <div class="key-info">
-        <div class="key-label">${escHtml(k.label)}</div>
-        <div class="key-preview">${escHtml(k.preview)}</div>
-        <div class="key-date">Created ${new Date(k.createdAt).toLocaleString()}</div>
-      </div>
-      <div class="key-actions">
-        <button class="key-action-btn regen-btn" data-id="${k.id}">REGENERATE</button>
-        <button class="key-action-btn danger delete-btn" data-id="${k.id}">DELETE</button>
-      </div>
-    </div>
-  `).join('');
 
-  list.querySelectorAll('.regen-btn').forEach(btn => {
-    btn.addEventListener('click', () => regenKey(btn.dataset.id));
-  });
-  list.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => deleteKey(btn.dataset.id));
-  });
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Login failed');
+    }
+
+    authToken = data.token;
+    currentUser = data.username;
+    localStorage.setItem('authToken', authToken);
+    localStorage.setItem('currentUser', currentUser);
+
+    successDiv.textContent = `Login successful! Welcome back, ${currentUser}`;
+    successDiv.classList.remove('hidden');
+
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+
+    updateAuthUI();
+
+    setTimeout(() => {
+      successDiv.classList.add('hidden');
+    }, 3000);
+  } catch (error) {
+    errorDiv.textContent = error.message;
+    errorDiv.classList.remove('hidden');
+  }
 }
 
-$('create-key-btn').addEventListener('click', () => {
-  $('key-modal').classList.remove('hidden');
-  $('key-label').focus();
-  $('key-error').classList.add('hidden');
-});
-$('key-modal-close').addEventListener('click', () => $('key-modal').classList.add('hidden'));
-$('key-modal').addEventListener('click', e => { if (e.target === $('key-modal')) $('key-modal').classList.add('hidden'); });
+function logout() {
+  authToken = null;
+  currentUser = null;
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+  updateAuthUI();
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+}
 
-$('key-create-submit').addEventListener('click', async () => {
-  const label = $('key-label').value.trim() || 'Default';
-  $('key-error').classList.add('hidden');
+function updateAuthUI() {
+  const userInfo = document.getElementById('userInfo');
+  const authRequired = document.getElementById('authRequired');
+  const keysPanel = document.getElementById('keysPanel');
+
+  if (authToken && currentUser) {
+    userInfo.classList.remove('hidden');
+    document.getElementById('currentUser').textContent = currentUser;
+    authRequired.classList.add('hidden');
+    keysPanel.classList.remove('hidden');
+  } else {
+    userInfo.classList.add('hidden');
+    authRequired.classList.remove('hidden');
+    keysPanel.classList.add('hidden');
+  }
+}
+
+// Decode Functions
+async function decodeScript() {
+  const input = document.getElementById('scriptId').value;
+  const resultDiv = document.getElementById('decodeResult');
+  const errorDiv = document.getElementById('decodeError');
+  const contentDiv = document.getElementById('scriptContent');
+
+  resultDiv.classList.add('hidden');
+  errorDiv.classList.add('hidden');
+
+  if (!input) {
+    errorDiv.textContent = 'Please enter a script ID or URL';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
   try {
-    const res = await fetch(`${API_BASE}/api/keys`, {
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/decode`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      headers,
+      body: JSON.stringify({
+        id: !input.includes('http') ? input : undefined,
+        url: input.includes('http') ? input : undefined
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Decode failed');
+    }
+
+    contentDiv.textContent = data.lua || 'No script content';
+    resultDiv.classList.remove('hidden');
+  } catch (error) {
+    errorDiv.textContent = error.message;
+    errorDiv.classList.remove('hidden');
+  }
+}
+
+// API Key Functions
+async function loadApiKeys() {
+  if (!authToken) return;
+
+  const keysList = document.getElementById('keysList');
+  const keysError = document.getElementById('keysError');
+
+  keysList.innerHTML = '';
+  keysError.classList.add('hidden');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/keys`, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load keys');
+    }
+
+    if (data.keys.length === 0) {
+      keysList.innerHTML = '<p style="color: var(--text-secondary);">No API keys yet. Create one to get started.</p>';
+      return;
+    }
+
+    data.keys.forEach(key => {
+      const keyItem = document.createElement('div');
+      keyItem.className = 'key-item';
+      keyItem.innerHTML = `
+        <div class="key-item-info">
+          <strong>${key.label}</strong>
+          <small>Preview: ${key.preview}</small>
+          <small>Created: ${new Date(key.createdAt).toLocaleDateString()}</small>
+        </div>
+        <div class="key-item-actions">
+          <button onclick="regenerateApiKey('${key.id}')">Regenerate</button>
+          <button onclick="deleteApiKey('${key.id}')" style="background-color: var(--error-color);">Delete</button>
+        </div>
+      `;
+      keysList.appendChild(keyItem);
+    });
+  } catch (error) {
+    keysError.textContent = error.message;
+    keysError.classList.remove('hidden');
+  }
+}
+
+async function createApiKey() {
+  if (!authToken) return;
+
+  const label = document.getElementById('keyLabel').value;
+  const resultDiv = document.getElementById('createKeyResult');
+  const contentDiv = document.getElementById('newKeyContent');
+
+  if (!label) {
+    alert('Please enter a label for the API key');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/keys`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({ label })
     });
-    const data = await res.json();
-    if (!res.ok) { showModalError('key-error', data.error); return; }
 
-    $('key-modal').classList.add('hidden');
-    $('key-label').value = '';
-    showKeyReveal(data.key);
-    loadKeys();
-  } catch {
-    showModalError('key-error', 'Network error.');
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to create key');
+    }
+
+    contentDiv.textContent = data.key;
+    resultDiv.classList.remove('hidden');
+    document.getElementById('keyLabel').value = '';
+
+    loadApiKeys();
+  } catch (error) {
+    alert(error.message);
   }
-});
-
-function showKeyReveal(key) {
-  $('revealed-key').textContent = key;
-  $('key-reveal-modal').classList.remove('hidden');
 }
-$('key-reveal-close').addEventListener('click', () => $('key-reveal-modal').classList.add('hidden'));
-$('copy-revealed-key').addEventListener('click', () => {
-  navigator.clipboard.writeText($('revealed-key').textContent).then(() => {
-    $('copy-revealed-key').textContent = 'COPIED!';
-    setTimeout(() => { $('copy-revealed-key').textContent = 'COPY'; }, 1500);
-  });
-});
 
-async function deleteKey(id) {
-  if (!confirm('Delete this API key? This cannot be undone.')) return;
+async function deleteApiKey(keyId) {
+  if (!authToken || !confirm('Are you sure you want to delete this API key?')) return;
+
   try {
-    const res = await fetch(`${API_BASE}/api/keys/${id}`, {
+    const response = await fetch(`${API_BASE}/api/keys/${keyId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${authToken}` }
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      }
     });
-    if (res.status === 401) { handleAuthExpiry(); return; }
-    loadKeys();
-  } catch { /* silent */ }
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Failed to delete key');
+    }
+
+    loadApiKeys();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
-async function regenKey(id) {
-  if (!confirm('Regenerate this key? The old key will stop working immediately.')) return;
+async function regenerateApiKey(keyId) {
+  if (!authToken) return;
+
   try {
-    const res = await fetch(`${API_BASE}/api/keys/${id}/regenerate`, {
+    const response = await fetch(`${API_BASE}/api/keys/${keyId}/regenerate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` }
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      }
     });
-    if (!res.ok) return;
-    const data = await res.json();
-    showKeyReveal(data.key);
-    loadKeys();
-  } catch { /* silent */ }
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to regenerate key');
+    }
+
+    document.getElementById('newKeyContent').textContent = data.key;
+    document.getElementById('createKeyResult').classList.remove('hidden');
+
+    loadApiKeys();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function formatBytes(b) {
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+// Utility Functions
+function copyToClipboard(elementId) {
+  const element = document.getElementById(elementId);
+  const text = element.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const button = event.target;
+    const originalText = button.textContent;
+    button.textContent = '✓ Copied!';
+    setTimeout(() => {
+      button.textContent = originalText;
+    }, 2000);
+  }).catch(() => {
+    alert('Failed to copy to clipboard');
+  });
 }
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function showModalError(id, msg) {
-  const el = $(id);
-  el.textContent = msg;
-  el.classList.remove('hidden');
-}
-
-function handleAuthExpiry() {
-  authToken = null; authUser = null;
-  localStorage.removeItem(AUTH_TOKEN_KEY);
-  localStorage.removeItem(AUTH_USER_KEY);
-  updateAuthUI();
-  renderKeysPage();
-                    }

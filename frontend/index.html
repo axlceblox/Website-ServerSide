@@ -1,253 +1,102 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cryptid X Decoder</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="scanlines"></div>
-  <div class="noise"></div>
+  <div class="container">
+    <header>
+      <h1>🔐 Cryptid X Decoder</h1>
+      <p>Decrypt and retrieve authorized Lua scripts</p>
+    </header>
 
-  <!-- NAV -->
-  <nav class="nav">
-    <div class="nav-logo">
-      <span class="logo-bracket">[</span>
-      <span class="logo-text">CRYPTID<span class="accent">_X</span></span>
-      <span class="logo-bracket">]</span>
-    </div>
-    <div class="nav-links">
-      <a href="#decoder" class="nav-link active" data-page="decoder">DECODE</a>
-      <a href="#history" class="nav-link" data-page="history">HISTORY</a>
-      <a href="#keys" class="nav-link" data-page="keys" id="keys-nav">API KEYS</a>
-      <button class="nav-btn" id="auth-toggle">LOGIN</button>
-    </div>
-  </nav>
+    <nav class="navbar">
+      <button class="nav-btn active" onclick="showTab('decode')">Decode</button>
+      <button class="nav-btn" onclick="showTab('auth')">Auth</button>
+      <button class="nav-btn" onclick="showTab('keys')">API Keys</button>
+    </nav>
 
-  <!-- HERO -->
-  <header class="hero">
-    <div class="hero-grid"></div>
-    <div class="hero-content">
-      <div class="status-bar">
-        <span class="status-dot"></span>
-        <span class="status-text">SYSTEM ONLINE</span>
-        <span class="status-sep">|</span>
-        <span id="live-time"></span>
+    <!-- Decode Tab -->
+    <section id="decode" class="tab active">
+      <h2>Decode Script</h2>
+      <div class="form-group">
+        <label for="scriptId">Script ID or URL:</label>
+        <input type="text" id="scriptId" placeholder="Enter script ID or full URL">
+        <button onclick="decodeScript()">Decode</button>
       </div>
-      <h1 class="hero-title">
-        <span class="title-line1">CRYPTID</span>
-        <span class="title-line2">X<span class="title-blink">_</span>DECODER</span>
-      </h1>
-      <p class="hero-sub">Decrypt &amp; retrieve authorized Lua scripts from the encrypted repository</p>
-    </div>
-  </header>
+      <div id="decodeResult" class="result hidden">
+        <h3>Result</h3>
+        <pre id="scriptContent"></pre>
+        <button onclick="copyToClipboard('scriptContent')">Copy</button>
+      </div>
+      <div id="decodeError" class="error hidden"></div>
+    </section>
 
-  <!-- MAIN PAGES -->
-  <main class="main">
-
-    <!-- ── DECODER PAGE ─────────────────────────────────────── -->
-    <section class="page active" id="page-decoder">
-      <div class="container">
-        <div class="panel decoder-panel">
-          <div class="panel-header">
-            <span class="panel-label">// DECODE ENGINE</span>
-            <div class="panel-dots"><span></span><span></span><span></span></div>
+    <!-- Auth Tab -->
+    <section id="auth" class="tab">
+      <h2>Authentication</h2>
+      <div class="auth-container">
+        <div class="auth-box">
+          <h3>Login</h3>
+          <div class="form-group">
+            <label for="loginUsername">Username:</label>
+            <input type="text" id="loginUsername">
+            <label for="loginPassword">Password:</label>
+            <input type="password" id="loginPassword">
+            <button onclick="login()">Login</button>
           </div>
-
-          <div class="input-group">
-            <label class="field-label" for="script-input">
-              SCRIPT ID <span class="label-hint">— paste a URL or numeric ID</span>
-            </label>
-            <div class="input-wrapper">
-              <input
-                type="text"
-                id="script-input"
-                class="field"
-                placeholder="https://encrypt-x.pages.dev/Scripts?Id=2723928466610  or  2723928466610"
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <button class="paste-btn" id="paste-btn" title="Paste from clipboard">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h11a2 2 0 012 2v1"/></svg>
-              </button>
-            </div>
-          </div>
-
-          <button class="decode-btn" id="decode-btn">
-            <span class="btn-text">INITIATE DECODE</span>
-            <span class="btn-arrow">→</span>
-          </button>
-
-          <!-- LOADING STATE -->
-          <div class="loading-state hidden" id="loading-state">
-            <div class="loading-bar-wrap">
-              <div class="loading-bar" id="loading-bar"></div>
-            </div>
-            <div class="loading-steps" id="loading-steps">
-              <span class="step active">Validating ID...</span>
-            </div>
-          </div>
-
-          <!-- ERROR STATE -->
-          <div class="error-box hidden" id="error-box">
-            <span class="error-icon">✖</span>
-            <span id="error-text"></span>
-          </div>
-
-          <!-- RESULT STATE -->
-          <div class="result-panel hidden" id="result-panel">
-            <div class="result-meta">
-              <div class="meta-item">
-                <span class="meta-label">SCRIPT ID</span>
-                <span class="meta-value" id="res-id">—</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-label">SIZE</span>
-                <span class="meta-value" id="res-bytes">—</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-label">STATUS</span>
-                <span class="meta-value success">DECRYPTED</span>
-              </div>
-            </div>
-
-            <div class="code-wrap">
-              <div class="code-header">
-                <span class="code-lang">lua</span>
-                <div class="code-actions">
-                  <button class="code-btn" id="copy-btn">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h11a2 2 0 012 2v1"/></svg>
-                    COPY
-                  </button>
-                  <button class="code-btn primary" id="download-btn">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    DOWNLOAD .lua
-                  </button>
-                </div>
-              </div>
-              <pre class="code-preview" id="code-preview"><code id="lua-output"></code></pre>
-            </div>
-          </div>
+          <div id="loginError" class="error hidden"></div>
+          <div id="loginSuccess" class="success hidden"></div>
         </div>
+
+        <div class="auth-box">
+          <h3>Register</h3>
+          <div class="form-group">
+            <label for="registerUsername">Username:</label>
+            <input type="text" id="registerUsername">
+            <label for="registerPassword">Password:</label>
+            <input type="password" id="registerPassword">
+            <button onclick="register()">Register</button>
+          </div>
+          <div id="registerError" class="error hidden"></div>
+          <div id="registerSuccess" class="success hidden"></div>
+        </div>
+      </div>
+
+      <div id="userInfo" class="user-info hidden">
+        <h3>Logged in as: <span id="currentUser"></span></h3>
+        <button onclick="logout()">Logout</button>
       </div>
     </section>
 
-    <!-- ── HISTORY PAGE ────────────────────────────────────────── -->
-    <section class="page hidden" id="page-history">
-      <div class="container">
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-label">// DECODE HISTORY</span>
-            <button class="clear-btn" id="clear-history">CLEAR ALL</button>
-          </div>
-          <div id="history-list" class="history-list">
-            <div class="empty-state">
-              <span class="empty-icon">∅</span>
-              <p>No decodes yet. Submit a Script ID to get started.</p>
-            </div>
-          </div>
+    <!-- API Keys Tab -->
+    <section id="keys" class="tab">
+      <h2>API Keys Management</h2>
+      <p class="info" id="authRequired">Please log in to manage API keys.</p>
+      
+      <div id="keysPanel" class="hidden">
+        <div class="form-group">
+          <label for="keyLabel">Key Label:</label>
+          <input type="text" id="keyLabel" placeholder="e.g., Discord Bot">
+          <button onclick="createApiKey()">Create API Key</button>
         </div>
+        <div id="createKeyResult" class="result hidden">
+          <h4>New API Key Created</h4>
+          <p><strong>This key will only be shown once. Save it now!</strong></p>
+          <pre id="newKeyContent"></pre>
+          <button onclick="copyToClipboard('newKeyContent')">Copy</button>
+        </div>
+
+        <h3>Your API Keys</h3>
+        <div id="keysList" class="keys-list"></div>
+        <div id="keysError" class="error hidden"></div>
       </div>
     </section>
-
-    <!-- ── API KEYS PAGE ──────────────────────────────────────── -->
-    <section class="page hidden" id="page-keys">
-      <div class="container">
-        <div class="panel" id="keys-auth-wall">
-          <div class="panel-header"><span class="panel-label">// ACCESS RESTRICTED</span></div>
-          <div class="auth-wall">
-            <span class="lock-icon">⊘</span>
-            <p>You must be logged in to manage API keys.</p>
-            <button class="decode-btn small" id="keys-login-btn">LOGIN / REGISTER</button>
-          </div>
-        </div>
-
-        <div class="panel hidden" id="keys-panel">
-          <div class="panel-header">
-            <span class="panel-label">// API KEY MANAGEMENT</span>
-            <button class="decode-btn small" id="create-key-btn">+ NEW KEY</button>
-          </div>
-          <div class="keys-info">
-            <span class="info-icon">ℹ</span>
-            Full key is shown <strong>once</strong> on creation. Store it securely.
-          </div>
-          <div id="keys-list" class="keys-list"></div>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- AUTH MODAL -->
-  <div class="modal-overlay hidden" id="auth-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title" id="modal-title">LOGIN</span>
-        <button class="modal-close" id="modal-close">✕</button>
-      </div>
-      <div class="modal-tabs">
-        <button class="tab-btn active" data-tab="login">LOGIN</button>
-        <button class="tab-btn" data-tab="register">REGISTER</button>
-      </div>
-      <div class="modal-body">
-        <div class="input-group">
-          <label class="field-label" for="auth-username">USERNAME</label>
-          <input type="text" id="auth-username" class="field" autocomplete="username" />
-        </div>
-        <div class="input-group">
-          <label class="field-label" for="auth-password">PASSWORD</label>
-          <input type="password" id="auth-password" class="field" autocomplete="current-password" />
-        </div>
-        <div class="error-box hidden" id="auth-error"></div>
-        <button class="decode-btn" id="auth-submit">LOGIN</button>
-        <p class="modal-footer-text" id="auth-mode-text">
-          No account? <a href="#" id="switch-mode">Register here</a>
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <!-- NEW KEY MODAL -->
-  <div class="modal-overlay hidden" id="key-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title">NEW API KEY</span>
-        <button class="modal-close" id="key-modal-close">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="input-group">
-          <label class="field-label" for="key-label">LABEL</label>
-          <input type="text" id="key-label" class="field" placeholder="e.g. Discord Bot" maxlength="64" />
-        </div>
-        <div class="error-box hidden" id="key-error"></div>
-        <button class="decode-btn" id="key-create-submit">CREATE KEY</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- KEY REVEAL MODAL -->
-  <div class="modal-overlay hidden" id="key-reveal-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title success">KEY CREATED</span>
-        <button class="modal-close" id="key-reveal-close">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="reveal-warn">
-          <span class="warn-icon">⚠</span>
-          Copy this key now. It will <strong>never be shown again.</strong>
-        </div>
-        <div class="key-reveal-box">
-          <code id="revealed-key"></code>
-          <button class="copy-key-btn" id="copy-revealed-key">COPY</button>
-        </div>
-      </div>
-    </div>
   </div>
 
   <script src="app.js"></script>
 </body>
-  </html>
+</html>

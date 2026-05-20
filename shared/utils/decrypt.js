@@ -1,89 +1,115 @@
 /**
- * Cryptid X Decoder — Shared Decryption Utility
- * Server-side only. Never expose this to the frontend bundle.
+ * Cryptid X Decryption Utility
+ * Base32 → XOR decryption algorithm
  */
 
-'use strict';
-
-// Standard RFC-4648 Base32 alphabet: A–Z + 2–7
+// Base32 alphabet (RFC-4648)
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const BASE32_LOOKUP = new Map([...BASE32_ALPHABET].map((c, i) => [c, i]));
 
 /**
- * Decodes a Base32-encoded string (RFC-4648) to a Buffer.
- * @param {string} input
- * @returns {Buffer}
+ * Decode a Base32 encoded string
+ * @param {string} encoded - Base32 encoded string
+ * @returns {Buffer} Decoded bytes
  */
-function base32Decode(input) {
-  const str = input.toUpperCase().replace(/=+$/, '');
-  let bits = 0;
-  let value = 0;
-  const output = [];
-
-  for (const char of str) {
-    const val = BASE32_LOOKUP.get(char);
-    if (val === undefined) {
-      throw new Error(`Invalid Base32 character: '${char}'`);
+function base32Decode(encoded) {
+  const normalized = encoded.toUpperCase().replace(/=/g, '');
+  const bits = normalized.split('').reduce((acc, char) => {
+    const value = BASE32_ALPHABET.indexOf(char);
+    if (value === -1) {
+      throw new Error(`Invalid Base32 character: ${char}`);
     }
-    value = (value << 5) | val;
-    bits += 5;
-    if (bits >= 8) {
-      output.push((value >>> (bits - 8)) & 0xff);
-      bits -= 8;
+    return acc + value.toString(2).padStart(5, '0');
+  }, '');
+
+  const bytes = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    const byte = bits.substring(i, i + 8);
+    if (byte.length === 8) {
+      bytes.push(parseInt(byte, 2));
     }
   }
 
-  return Buffer.from(output);
+  return Buffer.from(bytes);
 }
 
 /**
- * XOR-decrypts a buffer using a cycling key string.
- * @param {Buffer} data
- * @param {string} key
- * @returns {Buffer}
+ * XOR decrypt data using a key
+ * @param {Buffer} data - Encrypted data
+ * @param {string} key - XOR key
+ * @returns {Buffer} Decrypted data
  */
 function xorDecrypt(data, key) {
-  const keyBytes = Buffer.from(key, 'utf8');
-  const output = Buffer.alloc(data.length);
+  const keyBuffer = Buffer.from(key, 'utf-8');
+  const result = Buffer.alloc(data.length);
+
   for (let i = 0; i < data.length; i++) {
-    output[i] = data[i] ^ keyBytes[i % keyBytes.length];
+    result[i] = data[i] ^ keyBuffer[i % keyBuffer.length];
   }
-  return output;
+
+  return result;
 }
 
 /**
- * Validates the decrypted output looks like Lua source.
- * @param {string} text
- * @returns {boolean}
+ * Decrypt a Cryptid X script
+ * @param {string} encryptedScript - Base32 encoded encrypted script
+ * @param {string} key - XOR key for decryption
+ * @returns {string} Decrypted Lua source code
  */
-function looksLikeLua(text) {
-  // Heuristic: Lua files tend to have these patterns
-  return /[\x20-\x7E\n\r\t]/.test(text);
+function decrypt(encryptedScript, key) {
+  try {
+    // Step 1: Base32 decode
+    const decodedBytes = base32Decode(encryptedScript);
+
+    // Step 2: XOR decrypt
+    const decryptedBytes = xorDecrypt(decodedBytes, key);
+
+    // Step 3: Interpret as UTF-8
+    return decryptedBytes.toString('utf-8');
+  } catch (error) {
+    throw new Error(`Decryption failed: ${error.message}`);
+  }
 }
 
 /**
- * Full decode pipeline: Base32 → XOR → UTF-8 Lua string
- * @param {string} encodedScript  — the Script field from JSON
- * @param {string} key            — the Key field from JSON
- * @returns {{ lua: string, bytes: number }}
+ * Encrypt Lua source code to Cryptid X format
+ * @param {string} luaSource - Lua source code to encrypt
+ * @param {string} key - XOR key for encryption
+ * @returns {string} Base32 encoded encrypted data
  */
-function decodeScript(encodedScript, key) {
-  if (!encodedScript || typeof encodedScript !== 'string') {
-    throw new Error('Script field is missing or invalid.');
-  }
-  if (!key || typeof key !== 'string') {
-    throw new Error('Key field is missing or invalid.');
-  }
+function encrypt(luaSource, key) {
+  try {
+    // Step 1: Convert to bytes
+    const sourceBytes = Buffer.from(luaSource, 'utf-8');
 
-  const decoded = base32Decode(encodedScript.trim());
-  const decrypted = xorDecrypt(decoded, key);
-  const lua = decrypted.toString('utf8');
+    // Step 2: XOR encrypt
+    const keyBuffer = Buffer.from(key, 'utf-8');
+    const encrypted = Buffer.alloc(sourceBytes.length);
 
-  if (!looksLikeLua(lua)) {
-    throw new Error('Decryption produced non-printable output. Key or data may be corrupt.');
+    for (let i = 0; i < sourceBytes.length; i++) {
+      encrypted[i] = sourceBytes[i] ^ keyBuffer[i % keyBuffer.length];
+    }
+
+    // Step 3: Base32 encode
+    let bits = '';
+    for (let i = 0; i < encrypted.length; i++) {
+      bits += encrypted[i].toString(2).padStart(8, '0');
+    }
+
+    let encoded = '';
+    for (let i = 0; i < bits.length; i += 5) {
+      const chunk = bits.substring(i, i + 5).padEnd(5, '0');
+      encoded += BASE32_ALPHABET[parseInt(chunk, 2)];
+    }
+
+    return encoded;
+  } catch (error) {
+    throw new Error(`Encryption failed: ${error.message}`);
   }
-
-  return { lua, bytes: decrypted.length };
 }
 
-module.exports = { decodeScript, base32Decode, xorDecrypt };
+module.exports = {
+  decrypt,
+  encrypt,
+  base32Decode,
+  xorDecrypt
+};
