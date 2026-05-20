@@ -1,148 +1,279 @@
-// Configuration
-const API_BASE = window.CRYPTID_API_BASE || 'http://localhost:3001';
+// ============================================================================
+// CRYPTID X DECODER - Frontend Application
+// Complete rewrite with improved error handling, debugging, and UX
+// ============================================================================
 
-// State
-let authToken = localStorage.getItem('authToken') || null;
-let currentUser = localStorage.getItem('currentUser') || null;
+const config = {
+  API_BASE: window.CRYPTID_API_BASE || 'http://localhost:3001',
+  DEBUG: true,
+  TIMEOUT: 15000
+};
 
-// Initialize
+const state = {
+  authToken: localStorage.getItem('authToken') || null,
+  currentUser: localStorage.getItem('currentUser') || null,
+  lastScriptId: null
+};
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
 document.addEventListener('DOMContentLoaded', () => {
+  log('App initializing...');
   updateAuthUI();
+  checkServerConnection();
+  setupEventListeners();
 });
 
-// Tab Management
-function showTab(tabName) {
-  // Hide all tabs
+function setupEventListeners() {
+  // Enter key support
+  document.getElementById('scriptId').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') decodeScript();
+  });
+  document.getElementById('loginUsername').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') login();
+  });
+  document.getElementById('loginPassword').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') login();
+  });
+  document.getElementById('registerUsername').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') register();
+  });
+  document.getElementById('registerPassword').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') register();
+  });
+}
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+
+function log(message, data = null) {
+  if (config.DEBUG) {
+    console.log(`[CryptidX] ${message}`, data || '');
+  }
+}
+
+function error(message, err = null) {
+  console.error(`[CryptidX Error] ${message}`, err || '');
+}
+
+async function checkServerConnection() {
+  try {
+    const response = await fetch(`${config.API_BASE}/health`, { timeout: 5000 });
+    if (response.ok) {
+      updateConnectionStatus(true);
+      log('Server connected');
+    } else {
+      updateConnectionStatus(false);
+    }
+  } catch (err) {
+    updateConnectionStatus(false);
+    error('Server connection failed', err);
+  }
+}
+
+function updateConnectionStatus(connected) {
+  const status = document.getElementById('connectionStatus');
+  if (connected) {
+    status.textContent = 'Connected';
+    status.classList.remove('disconnected');
+    status.classList.add('connected');
+  } else {
+    status.textContent = 'Disconnected';
+    status.classList.remove('connected');
+    status.classList.add('disconnected');
+  }
+}
+
+function showTab(event, tabName) {
+  if (event) event.preventDefault();
+
   document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.remove('active');
   });
 
-  // Remove active class from all buttons
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.remove('active');
   });
 
-  // Show selected tab
-  document.getElementById(tabName).classList.add('active');
+  const tab = document.getElementById(tabName);
+  if (tab) {
+    tab.classList.add('active');
+    log(`Switched to tab: ${tabName}`);
+  }
 
-  // Add active class to clicked button
-  event.target.classList.add('active');
+  if (event && event.target) {
+    event.target.classList.add('active');
+  }
 
-  // Load data if needed
-  if (tabName === 'keys' && authToken) {
+  if (tabName === 'keys' && state.authToken) {
     loadApiKeys();
   }
 }
 
-// Auth Functions
-async function register() {
-  const username = document.getElementById('registerUsername').value;
-  const password = document.getElementById('registerPassword').value;
-  const errorDiv = document.getElementById('registerError');
-  const successDiv = document.getElementById('registerSuccess');
+// ============================================================================
+// API REQUESTS
+// ============================================================================
 
-  errorDiv.classList.add('hidden');
-  successDiv.classList.add('hidden');
+async function apiRequest(endpoint, options = {}) {
+  const method = options.method || 'GET';
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers
+  };
 
-  if (!username || !password) {
-    errorDiv.textContent = 'Please fill in all fields';
-    errorDiv.classList.remove('hidden');
-    return;
+  if (state.authToken && !headers['Authorization']) {
+    headers['Authorization'] = `Bearer ${state.authToken}`;
+  }
+
+  const fetchConfig = {
+    method,
+    headers,
+    ...options
+  };
+
+  if (options.body && typeof options.body === 'object') {
+    fetchConfig.body = JSON.stringify(options.body);
   }
 
   try {
-    const response = await fetch(`${API_BASE}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
+    log(`API Request: ${method} ${endpoint}`);
+
+    const response = await Promise.race([
+      fetch(`${config.API_BASE}${endpoint}`, fetchConfig),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timeout')), config.TIMEOUT)
+      )
+    ]);
 
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || 'Registration failed');
+      throw new Error(data.error || `HTTP ${response.status}`);
     }
 
-    authToken = data.token;
-    currentUser = data.username;
-    localStorage.setItem('authToken', authToken);
-    localStorage.setItem('currentUser', currentUser);
+    log(`API Response OK: ${endpoint}`, data);
+    return data;
+  } catch (err) {
+    error(`API Error: ${endpoint}`, err);
+    throw err;
+  }
+}
 
-    successDiv.textContent = `Registration successful! Welcome, ${currentUser}`;
-    successDiv.classList.remove('hidden');
+// ============================================================================
+// AUTHENTICATION
+// ============================================================================
+
+async function register() {
+  const username = document.getElementById('registerUsername').value.trim();
+  const password = document.getElementById('registerPassword').value;
+  const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
+
+  const loadingDiv = document.getElementById('registerLoading');
+  clearMessages('register');
+
+  if (!username || !password) {
+    showError('registerError', 'Username and password are required');
+    return;
+  }
+
+  if (username.length < 3) {
+    showError('registerError', 'Username must be at least 3 characters');
+    return;
+  }
+
+  if (password.length < 6) {
+    showError('registerError', 'Password must be at least 6 characters');
+    return;
+  }
+
+  if (password !== passwordConfirm) {
+    showError('registerError', 'Passwords do not match');
+    return;
+  }
+
+  loadingDiv.classList.remove('hidden');
+
+  try {
+    const response = await apiRequest('/api/auth/register', {
+      method: 'POST',
+      body: { username, password }
+    });
+
+    state.authToken = response.token;
+    state.currentUser = response.user.username;
+
+    localStorage.setItem('authToken', state.authToken);
+    localStorage.setItem('currentUser', state.currentUser);
+
+    showSuccess('registerSuccess', `Welcome ${response.user.username}`);
+    log('Registration successful');
 
     document.getElementById('registerUsername').value = '';
     document.getElementById('registerPassword').value = '';
+    document.getElementById('registerPasswordConfirm').value = '';
 
     updateAuthUI();
 
-    setTimeout(() => {
-      successDiv.classList.add('hidden');
-    }, 3000);
-  } catch (error) {
-    errorDiv.textContent = error.message;
-    errorDiv.classList.remove('hidden');
+    setTimeout(() => clearMessages('register'), 3000);
+  } catch (err) {
+    showError('registerError', err.message);
+  } finally {
+    loadingDiv.classList.add('hidden');
   }
 }
 
 async function login() {
-  const username = document.getElementById('loginUsername').value;
+  const username = document.getElementById('loginUsername').value.trim();
   const password = document.getElementById('loginPassword').value;
-  const errorDiv = document.getElementById('loginError');
-  const successDiv = document.getElementById('loginSuccess');
 
-  errorDiv.classList.add('hidden');
-  successDiv.classList.add('hidden');
+  const loadingDiv = document.getElementById('loginLoading');
+  clearMessages('login');
 
   if (!username || !password) {
-    errorDiv.textContent = 'Please fill in all fields';
-    errorDiv.classList.remove('hidden');
+    showError('loginError', 'Username and password are required');
     return;
   }
 
+  loadingDiv.classList.remove('hidden');
+
   try {
-    const response = await fetch(`${API_BASE}/api/auth/login`, {
+    const response = await apiRequest('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: { username, password }
     });
 
-    const data = await response.json();
+    state.authToken = response.token;
+    state.currentUser = response.user.username;
 
-    if (!response.ok) {
-      throw new Error(data.error || 'Login failed');
-    }
+    localStorage.setItem('authToken', state.authToken);
+    localStorage.setItem('currentUser', state.currentUser);
 
-    authToken = data.token;
-    currentUser = data.username;
-    localStorage.setItem('authToken', authToken);
-    localStorage.setItem('currentUser', currentUser);
-
-    successDiv.textContent = `Login successful! Welcome back, ${currentUser}`;
-    successDiv.classList.remove('hidden');
+    showSuccess('loginSuccess', `Welcome back ${response.user.username}`);
+    log('Login successful');
 
     document.getElementById('loginUsername').value = '';
     document.getElementById('loginPassword').value = '';
 
     updateAuthUI();
 
-    setTimeout(() => {
-      successDiv.classList.add('hidden');
-    }, 3000);
-  } catch (error) {
-    errorDiv.textContent = error.message;
-    errorDiv.classList.remove('hidden');
+    setTimeout(() => clearMessages('login'), 3000);
+  } catch (err) {
+    showError('loginError', err.message);
+  } finally {
+    loadingDiv.classList.add('hidden');
   }
 }
 
 function logout() {
-  authToken = null;
-  currentUser = null;
+  state.authToken = null;
+  state.currentUser = null;
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
   updateAuthUI();
-  document.getElementById('loginUsername').value = '';
-  document.getElementById('loginPassword').value = '';
+  log('Logged out');
 }
 
 function updateAuthUI() {
@@ -150,118 +281,118 @@ function updateAuthUI() {
   const authRequired = document.getElementById('authRequired');
   const keysPanel = document.getElementById('keysPanel');
 
-  if (authToken && currentUser) {
+  if (state.authToken && state.currentUser) {
     userInfo.classList.remove('hidden');
-    document.getElementById('currentUser').textContent = currentUser;
+    document.getElementById('currentUser').textContent = state.currentUser;
     authRequired.classList.add('hidden');
     keysPanel.classList.remove('hidden');
+    log(`Logged in as ${state.currentUser}`);
   } else {
     userInfo.classList.add('hidden');
     authRequired.classList.remove('hidden');
     keysPanel.classList.add('hidden');
+    log('Logged out');
   }
 }
 
-// Decode Functions
+// ============================================================================
+// DECODE
+// ============================================================================
+
 async function decodeScript() {
-  const input = document.getElementById('scriptId').value;
+  const input = document.getElementById('scriptId').value.trim();
   const resultDiv = document.getElementById('decodeResult');
-  const errorDiv = document.getElementById('decodeError');
+  const loadingDiv = document.getElementById('decodeLoading');
   const contentDiv = document.getElementById('scriptContent');
 
-  resultDiv.classList.add('hidden');
-  errorDiv.classList.add('hidden');
+  clearMessages('decode');
 
   if (!input) {
-    errorDiv.textContent = 'Please enter a script ID or URL';
-    errorDiv.classList.remove('hidden');
+    showError('decodeError', 'Please enter a script ID or URL');
     return;
   }
 
-  try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
+  loadingDiv.classList.remove('hidden');
 
-    const response = await fetch(`${API_BASE}/api/decode`, {
+  try {
+    state.lastScriptId = input;
+
+    const response = await apiRequest('/api/decode', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({
+      body: {
         id: !input.includes('http') ? input : undefined,
         url: input.includes('http') ? input : undefined
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Decode failed');
-    }
-
-    contentDiv.textContent = data.lua || 'No script content';
-    resultDiv.classList.remove('hidden');
-  } catch (error) {
-    errorDiv.textContent = error.message;
-    errorDiv.classList.remove('hidden');
-  }
-}
-
-// API Key Functions
-async function loadApiKeys() {
-  if (!authToken) return;
-
-  const keysList = document.getElementById('keysList');
-  const keysError = document.getElementById('keysError');
-
-  keysList.innerHTML = '';
-  keysError.classList.add('hidden');
-
-  try {
-    const response = await fetch(`${API_BASE}/api/keys`, {
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
       }
     });
 
-    const data = await response.json();
+    contentDiv.textContent = response.lua || 'No script content';
+    resultDiv.classList.remove('hidden');
+    log('Script decoded successfully');
+  } catch (err) {
+    showError('decodeError', err.message);
+  } finally {
+    loadingDiv.classList.add('hidden');
+  }
+}
 
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to load keys');
-    }
+function downloadScript() {
+  const content = document.getElementById('scriptContent').textContent;
+  const filename = `script-${state.lastScriptId || 'export'}-${Date.now()}.lua`;
+  downloadFile(content, filename);
+}
 
-    if (data.keys.length === 0) {
-      keysList.innerHTML = '<p style="color: var(--text-secondary);">No API keys yet. Create one to get started.</p>';
+// ============================================================================
+// API KEYS
+// ============================================================================
+
+async function loadApiKeys() {
+  if (!state.authToken) return;
+
+  const keysList = document.getElementById('keysList');
+  const keysError = document.getElementById('keysError');
+  const keysLoading = document.getElementById('keysLoading');
+
+  keysList.innerHTML = '';
+  keysError.classList.add('hidden');
+  keysLoading.classList.remove('hidden');
+
+  try {
+    const response = await apiRequest('/api/keys', { method: 'GET' });
+
+    keysLoading.classList.add('hidden');
+
+    if (response.keys.length === 0) {
+      keysList.innerHTML = '<p style="color: var(--text-secondary);">No API keys yet.</p>';
       return;
     }
 
-    data.keys.forEach(key => {
+    response.keys.forEach(key => {
       const keyItem = document.createElement('div');
       keyItem.className = 'key-item';
       keyItem.innerHTML = `
         <div class="key-item-info">
-          <strong>${key.label}</strong>
+          <strong>${escapeHtml(key.label)}</strong>
           <small>Preview: ${key.preview}</small>
           <small>Created: ${new Date(key.createdAt).toLocaleDateString()}</small>
         </div>
         <div class="key-item-actions">
           <button onclick="regenerateApiKey('${key.id}')">Regenerate</button>
-          <button onclick="deleteApiKey('${key.id}')" style="background-color: var(--error-color);">Delete</button>
+          <button onclick="deleteApiKey('${key.id}')\" style=\"background-color: var(--error-color);\">Delete</button>
         </div>
       `;
       keysList.appendChild(keyItem);
     });
-  } catch (error) {
-    keysError.textContent = error.message;
-    keysError.classList.remove('hidden');
+    log(`Loaded ${response.keys.length} API keys`);
+  } catch (err) {
+    keysLoading.classList.add('hidden');
+    showError('keysError', err.message);
   }
 }
 
 async function createApiKey() {
-  if (!authToken) return;
+  if (!state.authToken) return;
 
-  const label = document.getElementById('keyLabel').value;
+  const label = document.getElementById('keyLabel').value.trim();
   const resultDiv = document.getElementById('createKeyResult');
   const contentDiv = document.getElementById('newKeyContent');
 
@@ -271,93 +402,118 @@ async function createApiKey() {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/api/keys`, {
+    const response = await apiRequest('/api/keys', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ label })
+      body: { label }
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to create key');
-    }
-
-    contentDiv.textContent = data.key;
+    contentDiv.textContent = response.key;
     resultDiv.classList.remove('hidden');
     document.getElementById('keyLabel').value = '';
 
+    log('API key created successfully');
     loadApiKeys();
-  } catch (error) {
-    alert(error.message);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
   }
 }
 
 async function deleteApiKey(keyId) {
-  if (!authToken || !confirm('Are you sure you want to delete this API key?')) return;
+  if (!state.authToken || !confirm('Delete this API key?')) return;
 
   try {
-    const response = await fetch(`${API_BASE}/api/keys/${keyId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      throw new Error(data.error || 'Failed to delete key');
-    }
-
+    await apiRequest(`/api/keys/${keyId}`, { method: 'DELETE' });
+    log('API key deleted');
     loadApiKeys();
-  } catch (error) {
-    alert(error.message);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
   }
 }
 
 async function regenerateApiKey(keyId) {
-  if (!authToken) return;
+  if (!state.authToken) return;
 
   try {
-    const response = await fetch(`${API_BASE}/api/keys/${keyId}/regenerate`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    const response = await apiRequest(`/api/keys/${keyId}/regenerate`, { method: 'POST' });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to regenerate key');
-    }
-
-    document.getElementById('newKeyContent').textContent = data.key;
+    document.getElementById('newKeyContent').textContent = response.key;
     document.getElementById('createKeyResult').classList.remove('hidden');
 
+    log('API key regenerated');
     loadApiKeys();
-  } catch (error) {
-    alert(error.message);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
   }
 }
 
-// Utility Functions
+// ============================================================================
+// UI HELPERS
+// ============================================================================
+
+function showError(elementId, message) {
+  const element = document.getElementById(elementId);
+  element.textContent = message;
+  element.classList.remove('hidden');
+}
+
+function showSuccess(elementId, message) {
+  const element = document.getElementById(elementId);
+  element.textContent = message;
+  element.classList.remove('hidden');
+}
+
+function clearMessages(type) {
+  if (type === 'login') {
+    document.getElementById('loginError').classList.add('hidden');
+    document.getElementById('loginSuccess').classList.add('hidden');
+  } else if (type === 'register') {
+    document.getElementById('registerError').classList.add('hidden');
+    document.getElementById('registerSuccess').classList.add('hidden');
+  } else if (type === 'decode') {
+    document.getElementById('decodeError').classList.add('hidden');
+  }
+}
+
 function copyToClipboard(elementId) {
   const element = document.getElementById(elementId);
   const text = element.textContent;
   navigator.clipboard.writeText(text).then(() => {
     const button = event.target;
     const originalText = button.textContent;
-    button.textContent = '✓ Copied!';
+    button.textContent = 'Copied';
     setTimeout(() => {
       button.textContent = originalText;
     }, 2000);
+    log('Copied to clipboard');
   }).catch(() => {
     alert('Failed to copy to clipboard');
   });
+}
+
+function downloadFile(content, filename) {
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  log(`Downloaded file: ${filename}`);
+}
+
+function downloadKey() {
+  const content = document.getElementById('newKeyContent').textContent;
+  downloadFile(content, `api-key-${Date.now()}.txt`);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function showAPIStatus() {
+  alert(`API Status\nBackend: ${config.API_BASE}\nToken: ${state.authToken ? 'Active' : 'None'}\nUser: ${state.currentUser || 'Not logged in'}`);
 }
